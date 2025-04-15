@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime
 from collections import deque
 from src.database.db_operations import DatabaseOperations
+from src.utils.camera_controls import CameraControls
 
 class FaceRecognitionSystem:
     def __init__(self):
@@ -167,56 +168,75 @@ class FaceRecognitionSystem:
         # Create directories if they don't exist
         os.makedirs("data/recognition_events", exist_ok=True)
         
-        # Set OpenCV window properties
-        cv2.namedWindow("Face Recognition System", cv2.WINDOW_NORMAL)
+        # Initialize camera controls
+        camera = CameraControls()
+        camera.set_capture_callback(lambda filename, _: print(f"Photo captured: {filename}"))
         
-        # Start video capture
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("Error: Could not open video stream from webcam.")
+        if not camera.start():
+            print("Error: Could not start camera.")
             return
-        
+            
         # Load the face detection cascade
         face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("Error: Failed to capture frame from webcam.")
-                break
-            
+        # Set window properties
+        cv2.namedWindow("Face Recognition System", cv2.WINDOW_NORMAL)
+        
+        # Show keyboard shortcuts
+        print("\nKeyboard Shortcuts:")
+        print("SPACE: Capture photo")
+        print("R: Reset/Retake")
+        print("ESC: Exit")
+        
+        while camera.is_running:
+            frame = camera.read_frame()
+            if frame is None:
+                continue
+                
             # Convert frame to grayscale for detection
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
             
+            # Process detected faces
+            detected_someone = False
             for (x, y, w, h) in faces:
+                detected_someone = True
                 # Extract face region
                 face_img = frame[y:y+h, x:x+w]
                 
                 # Recognize face
                 name, confidence = self.recognize_face(face_img)
                 
-                # Save recognition event if known face
-                self.save_recognition_event(name, face_img, confidence)
-                
-                # Draw rectangle and name with confidence
+                # Draw rectangle and name
                 color = (0, 255, 0) if name != "unknown" else (0, 0, 255)
                 cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
                 
                 # Display name and confidence
                 display_text = f"{name} ({confidence:.1f}%)"
-                cv2.putText(frame, display_text, (x, y-10), 
+                cv2.putText(frame, display_text, (x, y-10),
                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
             
-            # Display the frame
-            cv2.imshow("Face Recognition System", frame)
+            # Show capture hint if face detected
+            if detected_someone:
+                cv2.putText(frame, "Press SPACE to capture", (10, frame.shape[0] - 20),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Exit on 'q' press
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            # Display the frame
+            camera.show_preview(frame)
+            
+            # Handle keyboard input
+            key = cv2.waitKey(1) & 0xFF
+            if not camera.handle_key(key):
                 break
+                
+            # Handle photo capture
+            if key == ord(' ') and detected_someone:
+                for (x, y, w, h) in faces:
+                    face_img = frame[y:y+h, x:x+w]
+                    name, confidence = self.recognize_face(face_img)
+                    self.save_recognition_event(name, face_img, confidence)
         
-        cap.release()
-        cv2.destroyAllWindows()
+        camera.stop()
 
 def main():
     face_system = FaceRecognitionSystem()

@@ -5,6 +5,8 @@ import os
 from datetime import datetime
 from src.database.db_operations import DatabaseOperations
 from face_recognition import FaceRecognitionSystem
+from src.utils.camera_controls import CameraControls
+from src.utils.ui_feedback import UIFeedback
 
 class FaceRecognitionUI:
     def __init__(self):
@@ -93,35 +95,70 @@ class FaceRecognitionUI:
         user_name = self.user_list.item(selection[0])['values'][1]
         
         try:
-            # Initialize camera
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
-                messagebox.showerror("Error", "Could not access camera")
-                return
-                
-            sample_count = 0
-            max_samples = 5
+            # Create capture window
+            capture_window = tk.Toplevel(self.root)
+            capture_window.title(f"Capture Samples - {user_name}")
+            capture_window.geometry("800x600")
             
-            while sample_count < max_samples:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
+            # Initialize UI feedback
+            feedback = UIFeedback(capture_window)
+            feedback.start_capture_session(5)  # 5 samples per user
+            
+            # Initialize camera
+            camera = CameraControls()
+            
+            def on_capture(filename, image_bytes):
+                nonlocal sample_count
                 # Save face sample
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                image_path = f"data/face_samples/user_{user_id}_{timestamp}.png"
-                cv2.imwrite(image_path, frame)
+                image_path = f"data/face_samples/user_{user_id}_{filename}"
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
                 
                 # Add to database
                 self.db.add_face_sample(user_id, image_path)
                 sample_count += 1
                 
-                # Show progress
-                messagebox.showinfo("Progress", f"Captured sample {sample_count}/{max_samples}")
+                # Update progress
+                feedback.update_capture_progress(sample_count)
+                feedback.show_capture_feedback()
                 
-            cap.release()
-            self.refresh_user_list()
-            messagebox.showinfo("Success", f"Captured {sample_count} samples for {user_name}")
+                if sample_count >= max_samples:
+                    camera.stop()
+                    capture_window.after(1000, capture_window.destroy)
+                    self.refresh_user_list()
+                    messagebox.showinfo("Success", f"Captured {sample_count} samples for {user_name}")
+            
+            camera.set_capture_callback(on_capture)
+            camera.set_status_callback(feedback.update_status)
+            
+            if not camera.start():
+                messagebox.showerror("Error", "Could not access camera")
+                capture_window.destroy()
+                return
+            
+            sample_count = 0
+            max_samples = 5
+            
+            feedback.update_status("Press SPACE to capture photo")
+            
+            # Update camera preview
+            def update_preview():
+                if camera.is_running:
+                    frame = camera.read_frame()
+                    if frame is not None:
+                        # Convert frame for preview
+                        preview_text = f"Sample {sample_count + 1}/{max_samples}"
+                        camera.show_preview(frame, preview_text)
+                    capture_window.after(30, update_preview)
+            
+            update_preview()
+            
+            # Handle window close
+            def on_closing():
+                camera.stop()
+                capture_window.destroy()
+            
+            capture_window.protocol("WM_DELETE_WINDOW", on_closing)
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to capture samples: {str(e)}")
@@ -335,62 +372,99 @@ class FaceRecognitionUI:
             return
             
         try:
+            # Create detection window
+            detection_window = tk.Toplevel(self.root)
+            detection_window.title(f"Face Recognition - {self.place_var.get()}")
+            detection_window.geometry("1024x768")
+            
+            # Initialize UI feedback
+            feedback = UIFeedback(detection_window)
+            feedback.update_status("Starting face recognition system...")
+            
             # Initialize face recognition system
             face_system = FaceRecognitionSystem()
             
-            # Initialize camera
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
+            # Initialize camera controls
+            camera = CameraControls()
+            camera.set_status_callback(feedback.update_status)
+            
+            def on_capture(filename, image_bytes):
+                # Save the captured frame
+                image_path = f"data/recognition_events/{filename}"
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
+                feedback.show_capture_feedback()
+                feedback.update_status("Photo captured and saved")
+                
+            camera.set_capture_callback(on_capture)
+            
+            if not camera.start():
                 messagebox.showerror("Error", "Could not access camera")
+                detection_window.destroy()
                 return
-                
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                # Perform face detection and recognition
-                user_id, confidence = face_system.recognize_face(frame)
-                
-                if user_id:
-                    # Save the recognition event image
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    image_path = f"data/recognition_events/event_{user_id}_{timestamp}.png"
-                    cv2.imwrite(image_path, frame)
-                    
-                    # Record the event
-                    self.db.add_recognition_event(
-                        user_id=user_id,
-                        place_id=place_id,
-                        image_path=image_path,
-                        confidence_score=confidence
-                    )
-                    
-                    # Get user name for display
-                    user = self.db.get_user(user_id)
-                    user_name = user.name if user else "Unknown"
-                    
-                    # Show recognition info on frame
-                    cv2.putText(frame,
-                        f"{user_name} ({confidence:.1f}%)",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2
-                    )
-                
-                # Display the frame
-                cv2.imshow('Face Recognition', frame)
-                
-                # Break loop on 'q' press
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                    
-            cap.release()
-            cv2.destroyAllWindows()
+            
+            feedback.update_status("System ready - Press SPACE to capture")
+            
+            # Update camera preview with recognition
+            def update_preview():
+                if camera.is_running:
+                    frame = camera.read_frame()
+                    if frame is not None:
+                        # Perform face recognition
+                        user_id, confidence = face_system.recognize_face(frame)
+                        
+                        if user_id:
+                            # Get user name
+                            user = self.db.get_user(user_id)
+                            user_name = user.name if user else "Unknown"
+                            
+                            # Show recognition info on frame
+                            display_text = f"{user_name} ({confidence:.1f}%)"
+                            cv2.putText(frame, display_text,
+                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                            
+                            # Record the event if spacebar was pressed
+                            last_key = cv2.waitKey(1) & 0xFF
+                            if last_key == ord(' '):
+                                # Record recognition event
+                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                image_path = f"data/recognition_events/event_{user_id}_{timestamp}.png"
+                                cv2.imwrite(image_path, frame)
+                                
+                                self.db.add_recognition_event(
+                                    user_id=user_id,
+                                    place_id=place_id,
+                                    image_path=image_path,
+                                    confidence_score=confidence
+                                )
+                                feedback.update_status(f"Recognition saved: {user_name}")
+                        
+                        # Show the frame
+                        camera.show_preview(frame)
+                        
+                        # Handle camera controls
+                        key = cv2.waitKey(1) & 0xFF
+                        if not camera.handle_key(key):
+                            detection_window.destroy()
+                            return
+                        
+                    detection_window.after(30, update_preview)
+            
+            update_preview()
+            
+            # Handle window close
+            def on_closing():
+                camera.stop()
+                detection_window.destroy()
+            
+            detection_window.protocol("WM_DELETE_WINDOW", on_closing)
             
         except Exception as e:
             messagebox.showerror("Error", f"Detection error: {str(e)}")
-            if 'cap' in locals():
-                cap.release()
-            cv2.destroyAllWindows()
+            if 'camera' in locals():
+                camera.stop()
+            if 'detection_window' in locals():
+                detection_window.destroy()
 
     def add_place(self):
         """Add a new place to the system"""
