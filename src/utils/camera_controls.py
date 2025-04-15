@@ -15,19 +15,30 @@ class CameraControls:
 
     def start(self, device_id: int = 0) -> bool:
         """Start the camera capture"""
-        try:
-            self.cap = cv2.VideoCapture(device_id)
-            if not self.cap.isOpened():
-                self._update_status("Failed to open camera")
-                return False
-                
-            self.is_running = True
-            self._update_status("Camera started")
-            return True
-            
-        except Exception as e:
-            self._update_status(f"Camera error: {str(e)}")
-            return False
+        # Try different camera indices if the first one fails
+        camera_indices = [0, 1, -1, "/dev/video0", "/dev/video1"]
+        
+        for idx in camera_indices:
+            try:
+                self.cap = cv2.VideoCapture(idx)
+                if self.cap.isOpened():
+                    # Test read a frame
+                    ret, _ = self.cap.read()
+                    if ret:
+                        self.is_running = True
+                        self._update_status(f"Camera started (index: {idx})")
+                        return True
+                    else:
+                        self.cap.release()
+                        
+            except Exception as e:
+                print(f"Failed to open camera {idx}: {str(e)}")
+                if self.cap:
+                    self.cap.release()
+                continue
+        
+        self._update_status("Failed to open any camera")
+        return False
 
     def stop(self):
         """Stop the camera capture"""

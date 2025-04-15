@@ -72,13 +72,14 @@ class DatabaseOperations:
         return place
 
     # Recognition Event operations
-    def add_recognition_event(self, user_id, place_id, image_path, confidence_score=None):
-        """Record a new recognition event with confidence score"""
+    def add_recognition_event(self, user_id, place_id, image_path, confidence_score=None, difference_score=None):
+        """Record a new recognition event with confidence and difference scores"""
         event = RecognitionEvent(
             user_id=user_id,
             place_id=place_id,
             image_path=image_path,
-            confidence_score=confidence_score
+            confidence_score=confidence_score,
+            difference_score=difference_score
         )
         self.session.add(event)
         self.session.commit()

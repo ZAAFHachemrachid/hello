@@ -55,6 +55,7 @@ class RecognitionEvent(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     image_path = Column(String, nullable=False)
     confidence_score = Column(Float)  # Added confidence score
+    difference_score = Column(Float)  # Added difference score
     
     # Relationships
     user = relationship("User", back_populates="recognition_events")

@@ -1,5 +1,8 @@
-opencv-contrib-python>=4.5.0
-numpy>=1.19.0
-sqlalchemy>=1.4.0
-pillow>=8.0.0
-tk>=0.1.0
+numpy>=1.19.5
+Pillow>=8.2.0
+matplotlib>=3.4.2
+scikit-learn>=0.24.2
+joblib>=1.2.0
+opencv-python>=4.5.3
+scikit-image>=0.18.2
+sqlalchemy>=1.4.23

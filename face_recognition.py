@@ -3,6 +3,7 @@ import os
 import numpy as np
 from datetime import datetime
 from collections import deque
+from skimage.metrics import structural_similarity as ssim
 from src.database.db_operations import DatabaseOperations
 from src.utils.camera_controls import CameraControls
 
@@ -72,6 +73,30 @@ class FaceRecognitionSystem:
             self.samples_per_user = samples_count
             print(f"Trained recognizer with {len(faces)} faces from {len(self.known_names)} users")
 
+    def calculate_face_difference(self, face1, face2):
+        """Calculate difference between two face images"""
+        if face1 is None or face2 is None:
+            return float('inf'), 0
+            
+        # Ensure both faces are preprocessed
+        face1_proc = self.preprocess_face(face1)
+        face2_proc = self.preprocess_face(face2)
+        
+        if face1_proc is None or face2_proc is None:
+            return float('inf'), 0
+            
+        # Calculate SSIM score
+        ssim_score = ssim(face1_proc, face2_proc)
+        
+        # Calculate L2 norm difference
+        l2_diff = np.linalg.norm(face1_proc.astype(float) - face2_proc.astype(float))
+        
+        # Normalize L2 difference to 0-100 scale
+        max_l2 = 100000  # Maximum expected L2 difference
+        normalized_diff = min(100, (l2_diff / max_l2) * 100)
+        
+        return normalized_diff, ssim_score
+
     def calculate_confidence_score(self, distance):
         """Convert LBPH distance to a confidence percentage"""
         # LBPH returns distance (lower is better)
@@ -118,7 +143,7 @@ class FaceRecognitionSystem:
         # Preprocess the face
         processed_face = self.preprocess_face(face_img)
         if processed_face is None:
-            return "unknown", 0
+            return "unknown", 0, 100  # High difference indicates poor match
         
         try:
             # Predict the label and get distance
@@ -130,21 +155,40 @@ class FaceRecognitionSystem:
             # Get dynamic threshold based on number of samples
             threshold = self.get_dynamic_threshold(label)
             
-            # Check if prediction meets confidence threshold
-            if confidence > threshold:
+            # Get reference face for comparison
+            difference_score = 100  # Default high difference
+            reference_face = None
+            if label in self.known_names:
+                users = self.db.get_all_users()
+                for user in users:
+                    if user.name == self.known_names[label]:
+                        face_samples = self.db.get_user_face_samples(user.id)
+                        if face_samples:
+                            reference_face = cv2.imread(face_samples[0].image_path)
+                            break
+            
+            # Calculate face difference if reference face exists
+            if reference_face is not None:
+                difference_score, _ = self.calculate_face_difference(face_img, reference_face)
+            
+            # Combined decision using both confidence and difference
+            combined_score = 0.6 * confidence + 0.4 * (100 - difference_score)
+            
+            # Check if prediction meets thresholds
+            if combined_score > threshold and difference_score < 70:  # Allow some difference
                 name = self.known_names.get(label, "unknown")
-                # Apply temporal smoothing
-                smoothed_name, smoothed_confidence = self.smooth_recognition((name, confidence))
-                return smoothed_name, smoothed_confidence
+                # Apply temporal smoothing with combined score
+                smoothed_name, smoothed_score = self.smooth_recognition((name, combined_score))
+                return smoothed_name, smoothed_score, difference_score
             else:
-                return "unknown", confidence
+                return "unknown", confidence, difference_score
                 
         except Exception as e:
             print(f"Error during face recognition: {e}")
-            return "unknown", 0
+            return "unknown", 0, 100  # High difference for errors
 
-    def save_recognition_event(self, name, face_img, confidence):
-        """Save recognition event to database with confidence score"""
+    def save_recognition_event(self, name, face_img, confidence, difference):
+        """Save recognition event to database with confidence and difference scores"""
         if name != "unknown":
             # Find user ID by name
             users = self.db.get_all_users()
@@ -160,8 +204,10 @@ class FaceRecognitionSystem:
                 image_path = f"data/recognition_events/{name}_{timestamp}.jpg"
                 cv2.imwrite(image_path, face_img)
                 
-                # Create recognition event with confidence score
-                self.db.add_recognition_event(user_id, self.current_place_id, image_path, confidence)
+                # Create recognition event with confidence and difference scores
+                self.db.add_recognition_event(user_id, self.current_place_id, image_path, 
+                                           confidence_score=confidence, 
+                                           difference_score=difference)
 
     def run(self):
         """Run the face recognition system"""
@@ -205,14 +251,14 @@ class FaceRecognitionSystem:
                 face_img = frame[y:y+h, x:x+w]
                 
                 # Recognize face
-                name, confidence = self.recognize_face(face_img)
+                name, confidence, difference = self.recognize_face(face_img)
                 
                 # Draw rectangle and name
                 color = (0, 255, 0) if name != "unknown" else (0, 0, 255)
                 cv2.rectangle(frame, (x, y), (x+w, y+h), color, 2)
                 
-                # Display name and confidence
-                display_text = f"{name} ({confidence:.1f}%)"
+                # Display name, confidence, and difference
+                display_text = f"{name} (Conf: {confidence:.1f}%, Diff: {difference:.1f}%)"
                 cv2.putText(frame, display_text, (x, y-10),
                           cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
             
@@ -233,8 +279,8 @@ class FaceRecognitionSystem:
             if key == ord(' ') and detected_someone:
                 for (x, y, w, h) in faces:
                     face_img = frame[y:y+h, x:x+w]
-                    name, confidence = self.recognize_face(face_img)
-                    self.save_recognition_event(name, face_img, confidence)
+                    name, confidence, difference = self.recognize_face(face_img)
+                    self.save_recognition_event(name, face_img, confidence, difference)
         
         camera.stop()
 

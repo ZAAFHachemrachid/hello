@@ -37,6 +37,7 @@ ENV/
 # Project specific
 recognized_faces/
 data/face_samples/
+data/dataset/
 data/recognition_events/
 user_samples/
 
